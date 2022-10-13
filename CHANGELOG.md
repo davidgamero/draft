@@ -1,3 +1,4 @@
 # Change Log
 
-## For help: please refer: ./docs/maintenance/README.md (Please delete this line)
+## [0.0.26]
+  - test release 1
