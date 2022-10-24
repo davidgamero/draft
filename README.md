@@ -31,7 +31,7 @@ In our directory that holds our application, we can run the CLI command ‘draft
 ![example of draft create command showing the prompt "select k8s deployment type" with three options "helm", "kustomize", and "manifests"](./ghAssets/draft-create.png)
 
 ### `generate-workflow`
-
+test
 Next up, we can run the ‘draft generate-workflow’ command.
 This command will automatically build out a GitHub Action for us.
 ![screenshot of command line executing "draft generate-workflow" printing "Draft has successfully genereated a Github workflow for your project"](./ghAssets/generate-workflow.png)
