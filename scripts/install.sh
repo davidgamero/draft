@@ -169,3 +169,4 @@ install() {
 }
 
 install
+exit 1
