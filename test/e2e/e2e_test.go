@@ -2,20 +2,26 @@ package e2e
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
+	"sigs.k8s.io/e2e-framework/pkg/envfuncs"
 	"sigs.k8s.io/e2e-framework/pkg/features"
+	"sigs.k8s.io/e2e-framework/support/kind"
 )
+
+var testenv env.Environment
 
 func TestKindCluster(t *testing.T) {
 	deploymentFeature := features.New("appsv1/deployment").
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			// start a deployment
 			deployment := newDeployment(cfg.Namespace(), "test-deployment", 1)
 			if err := cfg.Client().Resources().Create(ctx, deployment); err != nil {
 				t.Fatal(err)
@@ -58,4 +64,29 @@ func newDeployment(namespace string, name string, replicaCount int32) *appsv1.De
 			},
 		},
 	}
+}
+
+const ENV_DRAFT_BIN_KEY = "DRAFT_E2E_BIN"
+
+func TestMain(m *testing.M) {
+	fmt.Println("testing draft e2e...")
+	draftBinaryPath := os.Getenv(ENV_DRAFT_BIN_KEY)
+	if draftBinaryPath == "" {
+		panic(fmt.Sprintf("missing env var %s for draft binary path ", ENV_DRAFT_BIN_KEY))
+	}
+	testenv, _ = env.NewFromFlags()
+	kindClusterName := envconf.RandomName("draft-e2e-", 16)
+	namespace := envconf.RandomName("draft-e2e-ns-", 16)
+
+	testenv.Setup(
+		envfuncs.CreateClusterWithConfig(kind.NewProvider(), kindClusterName, "kind-config.yaml", kind.WithImage("kindest/node:v1.22.2")),
+		envfuncs.CreateNamespace(namespace),
+	)
+
+	testenv.Finish(
+		envfuncs.DeleteNamespace(namespace),
+		envfuncs.ExportClusterLogs(kindClusterName, "./logs"),
+		envfuncs.DestroyCluster(kindClusterName),
+	)
+	os.Exit(testenv.Run(m))
 }

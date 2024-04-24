@@ -2,9 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"runtime/debug"
+
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"runtime/debug"
 )
 
 var VERSION = "v0.0.7"
