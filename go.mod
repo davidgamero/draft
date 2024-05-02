@@ -15,7 +15,7 @@ require (
 	github.com/ivanpirog/coloredcobra v1.0.1
 	github.com/jbrukh/bayesian v0.0.0-20231117143245-13ae6f916c7a
 	github.com/manifoldco/promptui v0.9.0
-	github.com/microsoftgraph/msgraph-sdk-go v1.38.0
+	github.com/microsoftgraph/msgraph-sdk-go v1.40.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.0
 	github.com/stretchr/testify v1.9.0
