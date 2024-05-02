@@ -56,11 +56,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Checks out the repository this file is in
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b #v4.1.4
 
       # Logs in with your Azure credentials
       - name: Azure login
-        uses: azure/login@v1.4.6
+        uses: azure/login@6b2456866fc08b011acb422a92a4aa20e2c4de32 #v2.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -79,11 +79,11 @@ jobs:
     needs: [buildImage]
     steps:
       # Checks out the repository this file is in
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b #v4.1.4
 
       # Logs in with your Azure credentials
       - name: Azure login
-        uses: azure/login@v1.4.6
+        uses: azure/login@6b2456866fc08b011acb422a92a4aa20e2c4de32 #v2.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -91,13 +91,13 @@ jobs:
 
       # Use kubelogin to configure your kubeconfig for Azure auth
       - name: Set up kubelogin for non-interactive login
-        uses: azure/use-kubelogin@v1
+        uses: azure/use-kubelogin@76597ae0fcbaace21b05e13a2cbf8daee2c6e820 #v1.2
         with:
           kubelogin-version: 'v0.0.25'
 
       # Retrieves your Azure Kubernetes Service cluster's kubeconfig file
       - name: Get K8s context
-        uses: azure/aks-set-context@v3
+        uses: azure/aks-set-context@37037e33d3a2fc08abe40c887d81c3f6e1eb93b9 #v4.0.0
         with:
           resource-group: ${{ env.RESOURCE_GROUP }}
           cluster-name: ${{ env.CLUSTER_NAME }}
@@ -106,7 +106,7 @@ jobs:
 
       # Runs Helm to create manifest files
       - name: Bake deployment
-        uses: azure/k8s-bake@v2
+        uses: azure/k8s-bake@3f17e1158b2821b7c4f6b81af95f8c0ffc7582cc #v3.0.0
         with:
           renderEngine: "helm"
           helmChart: ${{ env.CHART_PATH }}
@@ -118,7 +118,7 @@ jobs:
 
       # Deploys application based on manifest files from previous step
       - name: Deploy application
-        uses: Azure/k8s-deploy@v4
+        uses: Azure/k8s-deploy@37037e33d3a2fc08abe40c887d81c3f6e1eb93b9 #v5.0.0
         with:
           action: deploy
           manifests: ${{ steps.bake.outputs.manifestsBundle }}
