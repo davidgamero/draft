@@ -1,6 +1,6 @@
 version: 2
 updates:
   - package-ecosystem: "github-actions"
-    directory: "/template/workflows/helm"
+    directory: "/template/workflows/helm/.github/workflows"
     schedule:
       interval: "weekly"
