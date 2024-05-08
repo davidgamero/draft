@@ -60,6 +60,8 @@ func TestKindCluster(t *testing.T) {
 		"--variable", "VERSION=1.22",
 		"--variable", fmt.Sprintf("NAMESPACE=%s", c.namespace),
 		"--variable", fmt.Sprintf("APPNAME=%s", c.appName),
+		"--variable", fmt.Sprintf("IMAGENAME=%s", c.appName),
+		"--variable", fmt.Sprintf("IMAGETAG=%s", "latest"),
 	)
 	cmd.Dir = dname
 	var outb, errb bytes.Buffer
@@ -72,6 +74,7 @@ func TestKindCluster(t *testing.T) {
 	}
 	// - run: ./draft -v create -c ./test/integration/$lang/helm.yaml -d ./langtest/
 
+	fs := make([]features.Feature, 0)
 	f1 := features.New("appsv1/deployment").
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			deployment := newDeployment(cfg.Namespace(), "test-deployment", 1)
@@ -94,8 +97,9 @@ func TestKindCluster(t *testing.T) {
 		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			return ctx
 		}).Feature()
+	fs = append(fs, f1)
 
-	testenv.Test(t, f1)
+	testenv.Test(t, fs...)
 }
 
 func newDeployment(namespace string, name string, replicaCount int32) *appsv1.Deployment {
