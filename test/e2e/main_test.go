@@ -27,9 +27,9 @@ const REG_CONTAINER_NAME = "kind-registry"
 
 var CONTEXT_KEY_DOCKER_CLIENT = struct{}{}
 
-// AddLocalRegistryConfigMap creates a configmap entry in kind cluster n
+// SetupLocalRegistry creates a configmap entry in kind cluster n
 // See https://kind.sigs.k8s.io/docs/user/local-registry/
-func AddLocalRegistryConfigMap(n string) func(context.Context, *envconf.Config) (context.Context, error) {
+func SetupLocalRegistry(n string) func(context.Context, *envconf.Config) (context.Context, error) {
 	return func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 		dockerCli, err := client.NewClientWithOpts(
 			client.FromEnv,
@@ -149,7 +149,7 @@ func TestMain(m *testing.M) {
 	testenv.Setup(
 		envfuncs.CreateClusterWithConfig(kind.NewProvider(), kindClusterName, "kind-config.yaml", kind.WithImage("kindest/node:v1.28.7@sha256:9bc6c451a289cf96ad0bbaf33d416901de6fd632415b076ab05f5fa7e4f65c58")),
 		envfuncs.CreateNamespace(namespace),
-		AddLocalRegistryConfigMap(kindClusterName),
+		SetupLocalRegistry(kindClusterName),
 	)
 
 	testenv.Finish(
