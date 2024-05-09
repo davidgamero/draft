@@ -1,14 +1,20 @@
 package e2e
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/archive"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,26 +33,36 @@ type CreateCommandFeatureConfig struct {
 	deployType string
 	repo       string
 }
+type ErrorLine struct {
+	Error       string      `json:"error"`
+	ErrorDetail ErrorDetail `json:"errorDetail"`
+}
+
+type ErrorDetail struct {
+	Message string `json:"message"`
+}
 
 func TestKindCluster(t *testing.T) {
 	c := CreateCommandFeatureConfig{
-		language:   "go",
+		language:   "gomodule",
 		port:       "8080",
 		appName:    "go-app",
 		namespace:  "go-ns",
 		deployType: "manifests",
-		repo:       "davidgamero/go-echo-no-mod",
+		repo:       "gambtho/go_echo",
 	}
 	draftBinaryPath := os.Getenv(ENV_DRAFT_BIN_KEY)
 
-	dname, err := os.MkdirTemp("", "create-command")
-	t.Logf("creating tmp dir: %s", dname)
+	repoDir, err := os.MkdirTemp("", "create-command")
+	t.Logf("creating tmp dir: %s", repoDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	cloneCmd := exec.Command("git", "clone", fmt.Sprintf("https://github.com/%s", c.repo), ".")
-	cloneCmd.Dir = dname
+	repoURL := fmt.Sprintf("https://github.com/%s", c.repo)
+	t.Logf("cloning %s into %s", repoURL, repoDir)
+	cloneCmd := exec.Command("git", "clone", repoURL, ".")
+	cloneCmd.Dir = repoDir
 	err = cloneCmd.Run()
 	if err != nil {
 		t.Fatal(err)
@@ -55,6 +71,7 @@ func TestKindCluster(t *testing.T) {
 	cmd := exec.Command(draftBinaryPath, "-v", "create",
 		"-l", c.language,
 		"--deploy-type", c.deployType,
+		"--skip-file-detection", // overwrite existing files like Dockerfile and manifests
 		"--variable", fmt.Sprintf("PORT=%s", c.port),
 		"--variable", fmt.Sprintf("SERVICEPORT=%s", c.port),
 		"--variable", "VERSION=1.22",
@@ -63,7 +80,7 @@ func TestKindCluster(t *testing.T) {
 		"--variable", fmt.Sprintf("IMAGENAME=%s", c.appName),
 		"--variable", fmt.Sprintf("IMAGETAG=%s", "latest"),
 	)
-	cmd.Dir = dname
+	cmd.Dir = repoDir
 	var outb, errb bytes.Buffer
 	cmd.Stdout = &outb
 	cmd.Stderr = &errb
@@ -77,6 +94,54 @@ func TestKindCluster(t *testing.T) {
 	fs := make([]features.Feature, 0)
 	f1 := features.New("appsv1/deployment").
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			dockerCLI := ctx.Value(CONTEXT_KEY_DOCKER_CLIENT).(*client.Client)
+			tar, err := archive.TarWithOptions(repoDir, &archive.TarOptions{})
+			if err != nil {
+				t.Errorf("archiving dockerfile context: %s", err.Error())
+			}
+
+			imageName := fmt.Sprintf("%s-%s-%s", c.deployType, c.language, c.port)
+			repoTag := fmt.Sprintf("localhost:5000/%s", imageName)
+			res, err := dockerCLI.ImageBuild(ctx, tar, types.ImageBuildOptions{
+				Dockerfile: "Dockerfile",
+				Tags:       []string{repoTag},
+			})
+			if err != nil {
+				t.Fatalf("starting docker image '%s' build: %s", repoTag, err.Error())
+			}
+			scanner := bufio.NewScanner(res.Body)
+			defer res.Body.Close()
+			for scanner.Scan() {
+				lastLine := scanner.Text()
+				t.Log(lastLine)
+
+				errLine := &ErrorLine{}
+				json.Unmarshal([]byte(lastLine), errLine)
+				if errLine.Error != "" {
+					t.Fatalf("building docker image: %s", errLine.Error)
+				}
+			}
+
+			pushResp, err := dockerCLI.ImagePush(ctx, repoTag, image.PushOptions{
+				All:          true,
+				RegistryAuth: "none",
+			})
+			if err != nil {
+				t.Fatalf("starting push for image %s: %s", repoTag, err.Error())
+			}
+			defer pushResp.Close()
+			scanner = bufio.NewScanner(pushResp)
+			for scanner.Scan() {
+				lastLine := scanner.Text()
+				t.Log(lastLine)
+
+				errLine := &ErrorLine{}
+				json.Unmarshal([]byte(lastLine), errLine)
+				if errLine.Error != "" {
+					t.Fatalf("pushing image %s: %s", repoTag, errLine.Error)
+				}
+			}
+
 			deployment := newDeployment(cfg.Namespace(), "test-deployment", 1)
 			if err := cfg.Client().Resources().Create(ctx, deployment); err != nil {
 				t.Fatal(err)

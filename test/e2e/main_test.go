@@ -25,6 +25,8 @@ const ENV_DRAFT_BIN_KEY = "DRAFT_E2E_BIN"
 const KIND_CLUSTER_PREFIX = "draft-e2e"
 const REG_CONTAINER_NAME = "kind-registry"
 
+var CONTEXT_KEY_DOCKER_CLIENT = struct{}{}
+
 // AddLocalRegistryConfigMap creates a configmap entry in kind cluster n
 // See https://kind.sigs.k8s.io/docs/user/local-registry/
 func AddLocalRegistryConfigMap(n string) func(context.Context, *envconf.Config) (context.Context, error) {
@@ -36,6 +38,7 @@ func AddLocalRegistryConfigMap(n string) func(context.Context, *envconf.Config) 
 		if err != nil {
 			return ctx, fmt.Errorf("creating docker client: %w", err)
 		}
+		ctx = context.WithValue(ctx, CONTEXT_KEY_DOCKER_CLIENT, dockerCli)
 		containerPort := "5000" // Port to be exposed inside the container
 		hostPort := "5000"      // Port to be exposed on the host
 		hostIP := "127.0.0.1"   // Host IP address to bind the port
@@ -84,9 +87,6 @@ func AddLocalRegistryConfigMap(n string) func(context.Context, *envconf.Config) 
 			if err != nil {
 				return ctx, fmt.Errorf("inspecting created registry container with ID=%s : %w", resp.ID, err)
 			}
-			//  docker run \
-			// -d --restart=always -p "127.0.0.1:${reg_port}:5000" --network bridge --name "${reg_name}" \
-			// registry:2
 		}
 		log.Printf("using registry container with ID=%s", regContainer.ID)
 		if !regContainer.State.Running {
