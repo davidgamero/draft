@@ -23,7 +23,6 @@ import (
 
 const ENV_DRAFT_BIN_KEY = "DRAFT_E2E_BIN"
 const KIND_CLUSTER_PREFIX = "draft-e2e"
-const REGISTRY_PORT = 5000
 const REG_CONTAINER_NAME = "kind-registry"
 
 // AddLocalRegistryConfigMap creates a configmap entry in kind cluster n
@@ -34,29 +33,67 @@ func AddLocalRegistryConfigMap(n string) func(context.Context, *envconf.Config) 
 			client.FromEnv,
 			client.WithAPIVersionNegotiation(),
 		)
+		if err != nil {
+			return ctx, fmt.Errorf("creating docker client: %w", err)
+		}
+		containerPort := "5000" // Port to be exposed inside the container
+		hostPort := "5000"      // Port to be exposed on the host
+		hostIP := "127.0.0.1"   // Host IP address to bind the port
+
+		// Create host configuration
 
 		log.Println("validating local registry container is running")
 		regContainer, err := dockerCli.ContainerInspect(ctx, REG_CONTAINER_NAME)
-		if err != nil || !regContainer.State.Running {
-			dockerCli.ContainerCreate(ctx,
-				&container.Config{
-					ExposedPorts: nat.PortSet{},
-					Image:        "registry:2",
+		if err != nil {
+			containerConfig := &container.Config{
+				ExposedPorts: map[nat.Port]struct{}{
+					nat.Port(containerPort + "/tcp"): {},
 				},
-				&container.HostConfig{},
-				&network.NetworkingConfig{
-					EndpointsConfig: map[string]*network.EndpointSettings{
-						"bridge": &network.EndpointSettings{
-							NetworkID: "bridge",
+				Image: "registry:2",
+			}
+			hostConfig := &container.HostConfig{
+				PortBindings: nat.PortMap{
+					nat.Port(containerPort + "/tcp"): []nat.PortBinding{
+						{
+							HostIP:   hostIP,
+							HostPort: hostPort,
 						},
 					},
 				},
+			}
+			netConfig := &network.NetworkingConfig{
+				EndpointsConfig: map[string]*network.EndpointSettings{
+					"bridge": {
+						NetworkID: "bridge",
+					},
+				},
+			}
+
+			resp, err := dockerCli.ContainerCreate(ctx,
+				containerConfig,
+				hostConfig,
+				netConfig,
 				nil,
 				REG_CONTAINER_NAME,
 			)
+			if err != nil {
+				return ctx, fmt.Errorf("creating new registry container: %w", err)
+			}
+
+			regContainer, err = dockerCli.ContainerInspect(ctx, REG_CONTAINER_NAME)
+			if err != nil {
+				return ctx, fmt.Errorf("inspecting created registry container with ID=%s : %w", resp.ID, err)
+			}
 			//  docker run \
 			// -d --restart=always -p "127.0.0.1:${reg_port}:5000" --network bridge --name "${reg_name}" \
 			// registry:2
+		}
+		log.Printf("using registry container with ID=%s", regContainer.ID)
+		if !regContainer.State.Running {
+			err := dockerCli.ContainerStart(ctx, regContainer.ID, container.StartOptions{})
+			if err != nil {
+				return ctx, fmt.Errorf("starting registry container with ID=%s: %w", regContainer.ID, err)
+			}
 		}
 
 		configMap := corev1.ConfigMap{
@@ -65,10 +102,11 @@ func AddLocalRegistryConfigMap(n string) func(context.Context, *envconf.Config) 
 				Namespace: "kube-public",
 			},
 			Data: map[string]string{
-				"localRegistryHosting.v1.host": fmt.Sprintf("localhost:%d", REGISTRY_PORT),
+				"localRegistryHosting.v1.host": fmt.Sprintf("localhost:%s", hostPort),
 				"localRegistryHosting.v1.help": "https://kind.sigs.k8s.io/docs/user/local-registry/",
 			},
 		}
+		log.Println("applying local registry configmap")
 		err = cfg.Client().Resources().Create(ctx, &configMap)
 		if err != nil {
 			return ctx, fmt.Errorf("creating local registry configmap: %w", err)
