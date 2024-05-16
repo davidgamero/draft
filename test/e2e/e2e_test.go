@@ -15,9 +15,9 @@ import (
 	"github.com/docker/docker/client"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/pkg/env"
@@ -35,6 +35,7 @@ type CreateCommandFeatureConfig struct {
 	deployType string
 	repo       string
 	imageName  string
+	version    string
 }
 type ErrorLine struct {
 	Error       string      `json:"error"`
@@ -55,7 +56,8 @@ func TestKindCluster(t *testing.T) {
 				appName:    "go-app",
 				namespace:  cfg.Namespace(),
 				deployType: "manifests",
-				repo:       "gambtho/go_echo",
+				repo:       "davidgamero/go_echo",
+				version:    "1.22",
 			}
 			imageName := fmt.Sprintf("localhost:5000/%s-%s-%s", c.deployType, c.language, c.port)
 			c.imageName = imageName
@@ -135,17 +137,37 @@ func TestKindCluster(t *testing.T) {
 					}
 					gvk := u.GroupVersionKind()
 
-					t.Logf("processing kind %s", gvk.Kind)
 					t.Logf("applying yaml %s", path)
-
-					// TODO: this is a good spot for a dynamic client
-					// https://github.com/kubernetes/client-go/blob/3aa45779f2e5592d52edf68da66abfbd0805e413/dynamic/simple.go#L102
-					err = cfg.Client().Resources().Patch(ctx, nil, k8s.Patch{
-						PatchType: types.ApplyPatchType,
-						Data:      b,
-					})
-					if err != nil {
-						return fmt.Errorf("applying yaml file %s: %w", d.Name(), err)
+					var o k8s.Object
+					gvkString := fmt.Sprintf("%s,%s,%s", gvk.Group, gvk.Version, gvk.Kind)
+					t.Logf("processing gvk: %s", gvkString)
+					switch gvkString {
+					case "apps,v1,Deployment":
+						d := &appsv1.Deployment{}
+						err := yaml.Unmarshal(b, d)
+						if err != nil {
+							return fmt.Errorf("marshaling yaml file %s into deployment: %w", path, err)
+						}
+						o = d
+					case "networking.k8s.io,v1,Ingress":
+						i := &networkingv1.Ingress{}
+						err := yaml.Unmarshal(b, i)
+						if err != nil {
+							return fmt.Errorf("marshaling yaml file %s into ingress: %w", path, err)
+						}
+						o = i
+					case ",v1,Service":
+						s := &corev1.Service{}
+						err := yaml.Unmarshal(b, s)
+						if err != nil {
+							return fmt.Errorf("marshaling yaml file %s into ingress: %w", path, err)
+						}
+						o = s
+					default:
+						return fmt.Errorf("marshaling yaml file %s into ingress: %w", path, err)
+					}
+					if err := cfg.Client().Resources().Create(ctx, o); err != nil {
+						return fmt.Errorf("creating resource for yaml file %s: %w", path, err)
 					}
 				}
 				return nil

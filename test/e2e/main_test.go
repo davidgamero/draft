@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -24,12 +25,13 @@ import (
 const ENV_DRAFT_BIN_KEY = "DRAFT_E2E_BIN"
 const KIND_CLUSTER_PREFIX = "draft-e2e"
 const REG_CONTAINER_NAME = "kind-registry"
+const KIND_NETWORK_NAME = "kind"
 
 var CONTEXT_KEY_DOCKER_CLIENT = struct{}{}
 
 // SetupLocalRegistry creates a configmap entry in kind cluster n
 // See https://kind.sigs.k8s.io/docs/user/local-registry/
-func SetupLocalRegistry(n string) func(context.Context, *envconf.Config) (context.Context, error) {
+func SetupLocalRegistry(kindClusterName string, kindProvider *cluster.Provider) func(context.Context, *envconf.Config) (context.Context, error) {
 	return func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 		dockerCli, err := client.NewClientWithOpts(
 			client.FromEnv,
@@ -44,7 +46,6 @@ func SetupLocalRegistry(n string) func(context.Context, *envconf.Config) (contex
 		hostIP := "127.0.0.1"   // Host IP address to bind the port
 
 		// Create host configuration
-
 		log.Println("validating local registry container is running")
 		regContainer, err := dockerCli.ContainerInspect(ctx, REG_CONTAINER_NAME)
 		if err != nil {
@@ -96,6 +97,66 @@ func SetupLocalRegistry(n string) func(context.Context, *envconf.Config) (contex
 			}
 		}
 
+		// TODO: Add registry configs to nodes
+
+		// # 3. Add the registry config to the nodes
+		// #
+		// # This is necessary because localhost resolves to loopback addresses that are
+		// # network-namespace local.
+		// # In other words: localhost in the container is not localhost on the host.
+		// #
+		// # We want a consistent name that works from both ends, so we tell containerd to
+		// # alias localhost:${reg_port} to the registry container when pulling images
+		// REGISTRY_DIR="/etc/containerd/certs.d/localhost:${reg_port}"
+		// for node in $(kind get nodes); do
+		//   docker exec "${node}" mkdir -p "${REGISTRY_DIR}"
+		//   cat <<EOF | docker exec -i "${node}" cp /dev/stdin "${REGISTRY_DIR}/hosts.toml"
+		// [host."http://${reg_name}:5000"]
+		// EOF
+		// done
+		nodes, err := kindProvider.ListNodes(kindClusterName)
+		if err != nil {
+			return ctx, fmt.Errorf("listing nodes for cluster: %w", err)
+		}
+		registryDir := fmt.Sprintf("/etc/containerd/certs.d/localhost:%s", containerPort)
+		for _, node := range nodes {
+			nodeName := node.String()
+			log.Printf("writing registry config to node %s", nodeName)
+			mkdirId, err := dockerCli.ContainerExecCreate(ctx, nodeName, types.ExecConfig{
+				Cmd: []string{"mkdir", "-p", registryDir},
+			})
+			if err != nil {
+				return ctx, fmt.Errorf("creating registry dir %s on node %s: %w", registryDir, nodeName, err)
+			}
+			dockerCli.ContainerExecStart(ctx, mkdirId.ID, types.ExecStartCheck{})
+			if err != nil {
+				return ctx, fmt.Errorf("starting mkdir exec %s on node %s: %w", mkdirId.ID, nodeName, err)
+			}
+
+			// TODO: fix copy to container to use tar https://github.com/moby/moby/issues/26652
+			hostsTomlContent := fmt.Sprintf("[host.\"http://%s:5000\"]", REG_CONTAINER_NAME)
+			hostsTomlContentReader := strings.NewReader(hostsTomlContent)
+			err = dockerCli.CopyToContainer(ctx, nodeName, fmt.Sprintf("%s/hosts.toml", registryDir), hostsTomlContentReader, types.CopyToContainerOptions{})
+			if err != nil {
+				return ctx, fmt.Errorf("copying registry to host file in node %s: %w", nodeName, err)
+			}
+		}
+
+		// Connect registry to cluster network
+		// # 4. Connect the registry to the cluster network if not already connected
+		// # This allows kind to bootstrap the network but ensures they're on the same network
+		// if [ "$(docker inspect -f='{{json .NetworkSettings.Networks.kind}}' "${reg_name}")" = 'null' ]; then
+		//   docker network connect "kind" "${reg_name}"
+		// fi
+		if _, ok := regContainer.NetworkSettings.Networks[KIND_NETWORK_NAME]; !ok {
+			log.Printf("connecting registry container %s to network %s", regContainer.ID, KIND_NETWORK_NAME)
+			err := dockerCli.NetworkConnect(ctx, KIND_NETWORK_NAME, regContainer.ID, &network.EndpointSettings{})
+			if err != nil {
+				return ctx, fmt.Errorf("connecting registry container %s to network %s: %w", regContainer.ID, KIND_NETWORK_NAME, err)
+			}
+		}
+
+		// Document local registry
 		configMap := corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "local-registry-hosting",
@@ -149,7 +210,7 @@ func TestMain(m *testing.M) {
 	testenv.Setup(
 		envfuncs.CreateClusterWithConfig(kind.NewProvider(), kindClusterName, "kind-config.yaml", kind.WithImage("kindest/node:v1.28.7@sha256:9bc6c451a289cf96ad0bbaf33d416901de6fd632415b076ab05f5fa7e4f65c58")),
 		envfuncs.CreateNamespace(namespace),
-		SetupLocalRegistry(kindClusterName),
+		SetupLocalRegistry(kindClusterName, kindProvider),
 	)
 
 	testenv.Finish(
