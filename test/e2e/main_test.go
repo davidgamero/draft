@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -128,15 +130,37 @@ func SetupLocalRegistry(kindClusterName string, kindProvider *cluster.Provider) 
 			if err != nil {
 				return ctx, fmt.Errorf("creating registry dir %s on node %s: %w", registryDir, nodeName, err)
 			}
-			dockerCli.ContainerExecStart(ctx, mkdirId.ID, types.ExecStartCheck{})
+			err = dockerCli.ContainerExecStart(ctx, mkdirId.ID, types.ExecStartCheck{})
 			if err != nil {
 				return ctx, fmt.Errorf("starting mkdir exec %s on node %s: %w", mkdirId.ID, nodeName, err)
 			}
 
 			// TODO: fix copy to container to use tar https://github.com/moby/moby/issues/26652
-			hostsTomlContent := fmt.Sprintf("[host.\"http://%s:5000\"]", REG_CONTAINER_NAME)
-			hostsTomlContentReader := strings.NewReader(hostsTomlContent)
-			err = dockerCli.CopyToContainer(ctx, nodeName, fmt.Sprintf("%s/hosts.toml", registryDir), hostsTomlContentReader, types.CopyToContainerOptions{})
+			var buf bytes.Buffer
+			tw := tar.NewWriter(&buf)
+			var files = []struct {
+				Name, Body string
+			}{
+				{"hosts.toml", fmt.Sprintf("[host.\"http://%s:5000\"]", REG_CONTAINER_NAME)},
+			}
+			for _, file := range files {
+				hdr := &tar.Header{
+					Name: file.Name,
+					Mode: 0600,
+					Size: int64(len(file.Body)),
+				}
+				if err := tw.WriteHeader(hdr); err != nil {
+					log.Fatal(err)
+				}
+				if _, err := tw.Write([]byte(file.Body)); err != nil {
+					log.Fatal(err)
+				}
+			}
+			if err := tw.Close(); err != nil {
+				log.Fatal(err)
+			}
+
+			err = dockerCli.CopyToContainer(ctx, nodeName, registryDir, &buf, types.CopyToContainerOptions{})
 			if err != nil {
 				return ctx, fmt.Errorf("copying registry to host file in node %s: %w", nodeName, err)
 			}

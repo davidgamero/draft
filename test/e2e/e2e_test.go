@@ -14,12 +14,15 @@ import (
 
 	"github.com/docker/docker/client"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
+	"sigs.k8s.io/e2e-framework/klient/wait"
+	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
@@ -184,9 +187,41 @@ func TestKindCluster(t *testing.T) {
 			if err := cfg.Client().Resources().Get(ctx, "test-deployment", cfg.Namespace(), &dep); err != nil {
 				t.Fatal(err)
 			}
-			if &dep != nil {
-				t.Logf("deployment found: %s", dep.Name)
+			testJob := batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: cfg.Namespace(),
+					Name:      "test-job",
+				},
+				Spec: batchv1.JobSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{
+								{
+									Name:  "test-container",
+									Image: "alpine",
+									Command: []string{
+										"wget",
+										"go-app.svc.cluster.local",
+									},
+								},
+							},
+							RestartPolicy: corev1.RestartPolicyNever,
+						},
+					},
+				},
 			}
+
+			if err := cfg.Client().Resources().Create(ctx, &testJob); err != nil {
+				t.Fatal(err)
+			}
+
+			err := wait.For(conditions.New(cfg.Client().Resources()).JobCompleted(&testJob), wait.WithTimeout(1*time.Minute))
+			if err != nil {
+				t.Fatalf("waiting for job to complete: %s", err.Error())
+			}
+
+			t.Fail()
+
 			return context.WithValue(ctx, "test-deployment", &dep)
 		}).
 		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
