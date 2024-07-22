@@ -192,6 +192,13 @@ func SetupLocalRegistry(kindClusterName string, kindProvider *cluster.Provider) 
 			},
 		}
 		log.Println("applying local registry configmap")
+		log.Println("deleting existing local registry configmap")
+		err = cfg.Client().Resources().Delete(ctx, &configMap)
+		if err != nil {
+			// delete configmap. ignore error if it doesn't exist
+			log.Println("unable to delete existing local registry configmap, continuing")
+		}
+
 		err = cfg.Client().Resources().Create(ctx, &configMap)
 		if err != nil {
 			return ctx, fmt.Errorf("creating local registry configmap: %w", err)
@@ -199,6 +206,10 @@ func SetupLocalRegistry(kindClusterName string, kindProvider *cluster.Provider) 
 		return ctx, nil
 	}
 }
+
+const (
+	namespacePrefix = "draft-e2e-ns"
+)
 
 func TestMain(m *testing.M) {
 	log.Println("testing draft e2e...")
@@ -209,8 +220,7 @@ func TestMain(m *testing.M) {
 		// panic(fmt.Sprintf("missing env var %s for draft binary path ", ENV_DRAFT_BIN_KEY))
 	}
 	testenv, _ = env.NewFromFlags()
-	kindClusterName := envconf.RandomName("draft-e2e", 16)
-	namespace := envconf.RandomName("draft-e2e-ns", 16)
+	namespace := envconf.RandomName(namespacePrefix, 16)
 	log.Println("creating kind cluster test env")
 
 	kindProvider := cluster.NewProvider(cluster.ProviderWithDocker())
@@ -219,20 +229,46 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 
+	kindClusterName := ""
 	for _, c := range clusters {
 		if strings.HasPrefix(c, KIND_CLUSTER_PREFIX) {
-			log.Printf("cleaning up old e2e cluster: %s\n", c)
+			log.Printf("found existing e2e cluster: %s\n", c)
 			f, err := os.CreateTemp("", "e2e-kubeconfig")
 			if err != nil {
 				panic(err)
 			}
+			log.Printf("exported kubeconfig for cluster: %s to %s\n", c, f.Name())
+			kindClusterName = c
 			kindProvider.ExportKubeConfig(c, f.Name(), false)
-			kindProvider.Delete(c, f.Name())
+			cfg := envconf.NewWithKubeConfig(f.Name())
+			testenv = env.NewWithConfig(cfg)
+
+			log.Println("listing namespaces")
+			namespaces := &corev1.NamespaceList{}
+			err = cfg.Client().Resources().List(context.Background(), namespaces)
+			if err != nil {
+				panic(err)
+			}
+			for _, ns := range namespaces.Items {
+				if strings.HasPrefix(ns.Name, namespacePrefix) {
+					log.Printf("deleting old e2e namespace: %s\n", ns.Name)
+					err = cfg.Client().Resources().Delete(context.Background(), &ns)
+					if err != nil {
+						panic(err)
+					}
+				}
+			}
 		}
 	}
 
+	if kindClusterName == "" {
+		kindClusterName = envconf.RandomName("draft-e2e", 16)
+		testenv.Setup(
+			envfuncs.CreateClusterWithConfig(kind.NewProvider(), kindClusterName, "kind-config.yaml", kind.WithImage("kindest/node:v1.28.7@sha256:9bc6c451a289cf96ad0bbaf33d416901de6fd632415b076ab05f5fa7e4f65c58")),
+		)
+	}
+
 	testenv.Setup(
-		envfuncs.CreateClusterWithConfig(kind.NewProvider(), kindClusterName, "kind-config.yaml", kind.WithImage("kindest/node:v1.28.7@sha256:9bc6c451a289cf96ad0bbaf33d416901de6fd632415b076ab05f5fa7e4f65c58")),
 		envfuncs.CreateNamespace(namespace),
 		SetupLocalRegistry(kindClusterName, kindProvider),
 	)

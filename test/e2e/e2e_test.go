@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"fmt"
 	"io/fs"
 	"os"
@@ -12,23 +13,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/docker/docker/client"
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/yaml"
-	"sigs.k8s.io/e2e-framework/klient/k8s"
-	"sigs.k8s.io/e2e-framework/klient/wait"
-	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
+
+	bo "github.com/cenkalti/backoff/v4"
 )
 
 var testenv env.Environment
+
+//go:embed tester/tester.go
+var testerContents string
 
 type CreateCommandFeatureConfig struct {
 	language   string
@@ -53,12 +56,14 @@ func TestKindCluster(t *testing.T) {
 	featuresToTest := make([]features.Feature, 0)
 	f1 := features.New("appsv1/deployment").
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			language := "gomodule"
+			deployType := "manifests"
 			c := CreateCommandFeatureConfig{
-				language:   "gomodule",
-				port:       "8080",
-				appName:    "go-app",
+				language:   language,
+				port:       "1323",
+				appName:    fmt.Sprintf("%s-%s", language, deployType),
 				namespace:  cfg.Namespace(),
-				deployType: "manifests",
+				deployType: deployType,
 				repo:       "davidgamero/go_echo",
 				version:    "1.22",
 			}
@@ -111,18 +116,7 @@ func TestKindCluster(t *testing.T) {
 				t.Fatalf("building and pushing dockerfile: %s", err.Error())
 			}
 
-			deployment := newDeployment(cfg.Namespace(), "test-deployment", 1)
-			if err := cfg.Client().Resources().Create(ctx, deployment); err != nil {
-				t.Fatal(err)
-			}
-			// decode := scheme.Codecs.UniversalDeserializer().Decode
-
-			// please let me just kubectl apply some yaml from a directory what have i done to deserve reading these KEPs
-			// https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/2155-clientgo-apply
-			// https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/555-server-side-apply
-			// https://github.com/kubernetes/enhancements/issues/555
-			//
-			// just apply all the yamls in this dir and set me free
+			// apply the generated yamls
 			manifestPath := filepath.Join(repoDir, "manifests")
 			err = filepath.WalkDir(manifestPath, func(path string, d fs.DirEntry, err error) error {
 				isYaml := strings.HasSuffix(d.Name(), ".yaml") || strings.HasSuffix(d.Name(), ".yml")
@@ -138,38 +132,8 @@ func TestKindCluster(t *testing.T) {
 					if err != nil {
 						return fmt.Errorf("marshaling yaml file %s into unstructured: %w", path, err)
 					}
-					gvk := u.GroupVersionKind()
 
-					t.Logf("applying yaml %s", path)
-					var o k8s.Object
-					gvkString := fmt.Sprintf("%s,%s,%s", gvk.Group, gvk.Version, gvk.Kind)
-					t.Logf("processing gvk: %s", gvkString)
-					switch gvkString {
-					case "apps,v1,Deployment":
-						d := &appsv1.Deployment{}
-						err := yaml.Unmarshal(b, d)
-						if err != nil {
-							return fmt.Errorf("marshaling yaml file %s into deployment: %w", path, err)
-						}
-						o = d
-					case "networking.k8s.io,v1,Ingress":
-						i := &networkingv1.Ingress{}
-						err := yaml.Unmarshal(b, i)
-						if err != nil {
-							return fmt.Errorf("marshaling yaml file %s into ingress: %w", path, err)
-						}
-						o = i
-					case ",v1,Service":
-						s := &corev1.Service{}
-						err := yaml.Unmarshal(b, s)
-						if err != nil {
-							return fmt.Errorf("marshaling yaml file %s into ingress: %w", path, err)
-						}
-						o = s
-					default:
-						return fmt.Errorf("marshaling yaml file %s into ingress: %w", path, err)
-					}
-					if err := cfg.Client().Resources().Create(ctx, o); err != nil {
+					if err := cfg.Client().Resources().Create(ctx, &u); err != nil {
 						return fmt.Errorf("creating resource for yaml file %s: %w", path, err)
 					}
 				}
@@ -179,50 +143,39 @@ func TestKindCluster(t *testing.T) {
 				t.Errorf("applying manifest yaml: %s", err.Error())
 			}
 
-			time.Sleep(2 * time.Second)
-			return ctx
+			testerDeployment := newTesterDeployment(cfg.Namespace(), language, deployType, fmt.Sprintf("http://%s.%s.svc.cluster.local:%s", c.appName, cfg.Namespace(), c.port), testerContents)
+			if err := cfg.Client().Resources().Create(ctx, testerDeployment); err != nil {
+				t.Fatal(err)
+			}
+
+			return context.WithValue(ctx, "tester-deployment-name", testerDeployment)
 		}).
 		Assess("deployment creation", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+
+			deployName := ctx.Value("tester-deployment-name").(*appsv1.Deployment).Name
+
+			backoff := bo.NewExponentialBackOff()
+			backoff.MaxElapsedTime = 120 * time.Second
+
 			var dep appsv1.Deployment
-			if err := cfg.Client().Resources().Get(ctx, "test-deployment", cfg.Namespace(), &dep); err != nil {
-				t.Fatal(err)
-			}
-			testJob := batchv1.Job{
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace: cfg.Namespace(),
-					Name:      "test-job",
-				},
-				Spec: batchv1.JobSpec{
-					Template: corev1.PodTemplateSpec{
-						Spec: corev1.PodSpec{
-							Containers: []corev1.Container{
-								{
-									Name:  "test-container",
-									Image: "alpine",
-									Command: []string{
-										"wget",
-										"go-app.svc.cluster.local",
-									},
-								},
-							},
-							RestartPolicy: corev1.RestartPolicyNever,
-						},
-					},
-				},
-			}
+			err := bo.Retry(func() error {
+				if err := cfg.Client().Resources().Get(ctx, deployName, cfg.Namespace(), &dep); err != nil {
+					return fmt.Errorf("getting tester deployment: %w", err)
+				}
 
-			if err := cfg.Client().Resources().Create(ctx, &testJob); err != nil {
-				t.Fatal(err)
-			}
+				if dep.Status.ReadyReplicas == 0 {
+					t.Logf("deployment %s has 0 replicas, waiting", deployName)
+					return fmt.Errorf("deployment %s has 0 replicas", deployName)
+				}
 
-			err := wait.For(conditions.New(cfg.Client().Resources()).JobCompleted(&testJob), wait.WithTimeout(1*time.Minute))
+				return nil
+			}, backoff)
+
 			if err != nil {
-				t.Fatalf("waiting for job to complete: %s", err.Error())
+				t.Fatal(err)
 			}
 
-			t.Fail()
-
-			return context.WithValue(ctx, "test-deployment", &dep)
+			return ctx
 		}).
 		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			return ctx
@@ -232,17 +185,60 @@ func TestKindCluster(t *testing.T) {
 	testenv.Test(t, featuresToTest...)
 }
 
-func newDeployment(namespace string, name string, replicaCount int32) *appsv1.Deployment {
+func newTesterDeployment(namespace string, language string, deployType string, testURL string, contents string) *appsv1.Deployment {
+	appName := fmt.Sprintf("%s-%s-tester", language, deployType)
+	command := []string{
+		"/bin/sh",
+		"-c",
+		"mkdir source && cd source && go mod init source && echo '" + contents + "' > main.go && go mod tidy && go run main.go",
+	}
+
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: map[string]string{"app": "test-app"}},
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Deployment",
+			APIVersion: "apps/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      appName,
+			Namespace: namespace,
+		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: &replicaCount,
+			Replicas: to.Ptr(int32(1)),
 			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app": "test-app"},
+				MatchLabels: map[string]string{"app": appName},
 			},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "test-app"}},
-				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "nginx", Image: "nginx"}}},
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      map[string]string{"app": appName},
+					Annotations: map[string]string{},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:    "container",
+						Image:   "mcr.microsoft.com/oss/go/microsoft/golang:1.22",
+						Command: command,
+						Env: []corev1.EnvVar{
+							{
+								Name:  "URL",
+								Value: testURL,
+							},
+						},
+						ReadinessProbe: &corev1.Probe{
+							FailureThreshold:    1,
+							InitialDelaySeconds: 5,
+							PeriodSeconds:       2,
+							SuccessThreshold:    1,
+							TimeoutSeconds:      30,
+							ProbeHandler: corev1.ProbeHandler{
+								HTTPGet: &corev1.HTTPGetAction{
+									Path:   "/",
+									Port:   intstr.FromInt(8080),
+									Scheme: corev1.URISchemeHTTP,
+								},
+							},
+						},
+					}},
+				},
 			},
 		},
 	}
