@@ -1,12 +1,14 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/subscription/armsubscription"
 	"github.com/Azure/draft/pkg/spinner"
 
 	bo "github.com/cenkalti/backoff/v4"
@@ -23,9 +25,10 @@ type SetUpCmd struct {
 	tenantId          string
 	appObjectId       string
 	spObjectId        string
+	AzClient          AzClient
 }
 
-func InitiateAzureOIDCFlow(sc *SetUpCmd, s spinner.Spinner) error {
+func InitiateAzureOIDCFlow(ctx context.Context, sc *SetUpCmd, s spinner.Spinner) error {
 	log.Debug("Commencing github connection with azure...")
 
 	if !HasGhCli() || !IsLoggedInToGh() {
@@ -50,7 +53,7 @@ func InitiateAzureOIDCFlow(sc *SetUpCmd, s spinner.Spinner) error {
 		return err
 	}
 
-	if err := sc.getTenantId(); err != nil {
+	if err := sc.getTenantId(ctx); err != nil {
 		return err
 	}
 
@@ -164,36 +167,61 @@ func (sc *SetUpCmd) CreateServicePrincipal() error {
 
 func (sc *SetUpCmd) assignSpRole() error {
 	log.Debug("Assigning contributor role to service principal...")
+
 	scope := fmt.Sprintf("/subscriptions/%s/resourceGroups/%s", sc.SubscriptionID, sc.ResourceGroupName)
 	assignSpRoleCmd := exec.Command("az", "role", "assignment", "create", "--role", "contributor", "--subscription", sc.SubscriptionID, "--assignee-object-id", sc.spObjectId, "--assignee-principal-type", "ServicePrincipal", "--scope", scope, "--only-show-errors")
 	out, err := assignSpRoleCmd.CombinedOutput()
+
 	if err != nil {
 		log.Printf("%s\n", out)
 		return err
 	}
-
 	log.Debug("Role assigned successfully!")
 	return nil
 }
 
-func (sc *SetUpCmd) getTenantId() error {
-	log.Debug("Fetching Azure account tenant ID")
-	getTenantIdCmd := exec.Command("az", "account", "show", "--query", "tenantId", "--only-show-errors")
-	out, err := getTenantIdCmd.CombinedOutput()
+func (sc *SetUpCmd) getTenantId(ctx context.Context) error {
+	log.Debug("getting Azure tenant ID")
+
+	tenants, err := sc.listTenants(ctx)
 	if err != nil {
-		log.Printf("%s\n", out)
-		return err
+		return fmt.Errorf("listing tenants: %w", err)
 	}
 
-	var tenantId string
-	if err := json.Unmarshal(out, &tenantId); err != nil {
-		return err
+	if len(tenants) == 0 {
+		return errors.New("no tenants found")
 	}
-	tenantId = fmt.Sprint(tenantId)
-
-	sc.tenantId = tenantId
+	if len(tenants) > 1 {
+		return errors.New("multiple tenants found")
+	}
+	sc.tenantId = *tenants[0].TenantID
 
 	return nil
+}
+
+func (sc *SetUpCmd) listTenants(ctx context.Context) ([]armsubscription.TenantIDDescription, error) {
+	log.Debug("listing Azure subscriptions")
+
+	var tenants []armsubscription.TenantIDDescription
+
+	pager := sc.AzClient.AzTenantClient.NewListPager(nil)
+
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing tenants page: %w", err)
+		}
+
+		for _, t := range page.Value {
+			if t == nil {
+				return nil, errors.New("nil tenant") // this should never happen but it's good to check just in case
+			}
+			tenants = append(tenants, *t)
+		}
+	}
+
+	log.Debug("finished listing Azure tenants")
+	return tenants, nil
 }
 
 func (sc *SetUpCmd) ValidateSetUpConfig() error {
@@ -286,6 +314,7 @@ func (sc *SetUpCmd) createFederatedCredentials() error {
 
 func (sc *SetUpCmd) getAppObjectId() error {
 	log.Debug("Fetching Azure application object ID")
+
 	getObjectIdCmd := exec.Command("az", "ad", "app", "show", "--only-show-errors", "--id", sc.appId, "--query", "id")
 	out, err := getObjectIdCmd.CombinedOutput()
 	if err != nil {

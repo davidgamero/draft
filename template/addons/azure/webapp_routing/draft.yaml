@@ -6,6 +6,11 @@ variables:
     type: "bool"
   - name: "ingress-host"
     description: "specify the host of the ingress resource"
+  - name: "GENERATORLABEL"
+    default: 
+      disablePrompt: true
+      value: "draft"
+    description: "the label to identify who generated the resource"
 references:
   service:
     - name: "service-name"
