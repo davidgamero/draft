@@ -30,14 +30,100 @@ type ErrorDetail struct {
 
 func TestKindCluster(t *testing.T) {
 	featuresToTest := make([]features.Feature, 0)
-	createCommandFeatureConfigs := []CreateCommandFeatureConfig{
-		{
-			language:   "gomodule",
-			deployType: "manifests",
-			port:       "1323",
-			repo:       "davidgamero/go_echo",
-			version:    "1.22",
-		},
+
+	deployTypes := []string{"manifests", "helm", "kustomize"}
+	createCommandFeatureConfigs := []CreateCommandFeatureConfig{}
+
+	for _, deployType := range deployTypes {
+		createCommandFeatureConfigs = append(createCommandFeatureConfigs, []CreateCommandFeatureConfig{
+			{
+				deployType: deployType,
+				language:   "gomodule",
+				version:    "1.22.0",
+				port:       "1323",
+				repo:       "gambtho/go_echo",
+			},
+			{
+				deployType: deployType,
+				language:   "go",
+				version:    "1.22.0",
+				port:       "8080",
+				repo:       "davidgamero/go-echo-no-mod",
+			},
+			{
+				deployType: deployType,
+				language:   "python",
+				version:    "3",
+				port:       "5000",
+				repo:       "OliverMKing/flask-hello-world",
+			},
+			{
+				deployType: deployType,
+				language:   "rust",
+				version:    "1.77.0",
+				port:       "8000",
+				repo:       "OliverMKing/tiny-http-hello-world",
+			},
+			{
+				deployType: deployType,
+				language:   "javascript",
+				version:    "14",
+				port:       "1313",
+				repo:       "davidgamero/express-hello-world",
+			},
+			{
+				deployType: deployType,
+				language:   "ruby",
+				version:    "3.1.2",
+				port:       "8000",
+				repo:       "OliverMKing/ruby-hello-world",
+			},
+			{
+				deployType: deployType,
+				language:   "csharp",
+				version:    "5.0",
+				port:       "80",
+				repo:       "imiller31/csharp-simple-web-app",
+			},
+			{
+				deployType:     deployType,
+				language:       "java",
+				version:        "11-jre",
+				builderVersion: "3-jdk-11",
+				port:           "8080",
+				repo:           "imiller31/simple-java-server",
+			},
+			{
+				deployType:     deployType,
+				language:       "gradle",
+				version:        "11-jre",
+				builderVersion: "7-jdk11",
+				port:           "8080",
+				repo:           "imiller31/simple-gradle-server",
+			},
+			{
+				deployType: deployType,
+				language:   "swift",
+				version:    "5.5",
+				port:       "8080",
+				repo:       "OliverMKing/swift-hello-world",
+			},
+			{
+				deployType:     deployType,
+				language:       "erlang",
+				version:        "3.15",
+				builderVersion: "24.2-alpine",
+				port:           "8080",
+				repo:           "bfoley13/ErlangExample",
+			},
+			{
+				deployType: deployType,
+				language:   "clojure",
+				version:    "8-jdk-alpine",
+				port:       "8080",
+				repo:       "imiller31/clojure-simple-http",
+			},
+		}...)
 	}
 
 	for _, c := range createCommandFeatureConfigs {

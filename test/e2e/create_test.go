@@ -24,13 +24,14 @@ import (
 )
 
 type CreateCommandFeatureConfig struct {
-	language   string
-	port       string
-	appName    string
-	deployType string
-	repo       string
-	imageName  string
-	version    string
+	language       string
+	port           string
+	appName        string
+	deployType     string
+	repo           string
+	imageName      string
+	version        string
+	builderVersion string
 }
 
 func NewDraftCreateFeature(c CreateCommandFeatureConfig) features.Feature {
@@ -63,7 +64,8 @@ func NewDraftCreateFeature(c CreateCommandFeatureConfig) features.Feature {
 				"--skip-file-detection", // overwrite existing files like Dockerfile and manifests
 				"--variable", fmt.Sprintf("PORT=%s", c.port),
 				"--variable", fmt.Sprintf("SERVICEPORT=%s", c.port),
-				"--variable", "VERSION=1.22",
+				"--variable", fmt.Sprintf("VERSION=%s", c.version),
+				"--variable", fmt.Sprintf("BUILDERVERSION=%s", c.builderVersion),
 				"--variable", fmt.Sprintf("NAMESPACE=%s", cfg.Namespace()),
 				"--variable", fmt.Sprintf("APPNAME=%s", c.appName),
 				"--variable", fmt.Sprintf("IMAGENAME=%s", c.imageName),

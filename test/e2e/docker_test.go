@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/archive"
 )
@@ -39,7 +38,7 @@ func DockerBuildAndPush(ctx context.Context, dockerCli *client.Client, imageName
 		}
 	}
 
-	pushResp, err := dockerCli.ImagePush(ctx, imageName, image.PushOptions{
+	pushResp, err := dockerCli.ImagePush(ctx, imageName, types.ImagePushOptions{
 		All:          true,
 		RegistryAuth: "none",
 	})
